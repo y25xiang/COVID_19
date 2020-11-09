@@ -12,6 +12,7 @@ Sys.setlocale("LC_ALL","English")
 
 ```{r lib, message=FALSE, warning=FALSE}
 # Load all the libraries needed.
+library(lubridate)
 library(tidyverse) # to tidy data
 library(dplyr) #data manipulation
 library(gridExtra) # used to arrange plot
@@ -26,17 +27,52 @@ library(forecast)
 ## Data Import
 
 ```{r data.import, message=FALSE}
-policy <- readr::read_csv("covid_policy_csv.csv")
-case_on <- readr::read_csv("case.csv") %>%
-  setnames(old = c('category','New cases'), new = c('date','new_cases'))
+# policy data from link cihi
+# ref: https://www.cihi.ca/en/covid-19-intervention-timeline-in-canada#resources
+policy <- readr::read_csv("policy.csv")
+# case data from ontario covid data
+# ref: https://covid-19.ontario.ca/data
+cases <- readr::read_csv("cases.csv") %>%
+  mutate(date=lubridate::mdy(sub("^(\\w+)\\s?(.*)$","\\2",category))) %>%
+  setnames(old = c('New cases','7-day average'), 
+           new = c('new_cases','avg_cases')) %>%
+  subset(select = c(date,new_cases,avg_cases))
+
+death <- readr::read_csv("death.csv") %>%
+  mutate(date=lubridate::mdy(sub("^(\\w+)\\s?(.*)$","\\2",category))) %>%
+  setnames(old = c('New deaths'), new = c('death')) %>%
+  subset(select = c(date,death))
+
+hospital <- readr::read_csv("activeHospital.csv") %>%
+  mutate(date=lubridate::mdy(sub("^(\\w+)\\s?(.*)$","\\2",category))) %>%
+  setnames(new = c('category','active_cases','hospital_cases','date')) %>%
+  subset(select = c(date,active_cases,hospital_cases))
+
+icu <- readr::read_csv("Hospital.csv") %>%
+  mutate(date=lubridate::mdy(sub("^(\\w+)\\s?(.*)$","\\2",category))) %>%
+  setnames(new = c('category','hospital_cases','icu_cases','date')) %>%
+  subset(select = c(date,icu_cases)) # hospital is duplicate
+
+test <- readr::read_csv("testsDaily.csv") %>%
+  mutate(date=lubridate::mdy(sub("^(\\w+)\\s?(.*)$","\\2",category))) %>%
+  setnames(new = c('category','tests','pos_perc','date')) %>%
+  subset(select = c(date,tests,pos_perc))
+
+# join all to case_on
+case_on <- cases %>%
+  left_join(death, by="date") %>%
+  left_join(hospital, by="date") %>%
+  left_join(icu,by="date") %>%
+  left_join(test,by="date")
 ```
 
 ```{r ts_case}
-case_ts <- zoo(case_on$new_cases, seq(from = as.Date("2020-01-30"), to = as.Date("2020-08-01"), by = 1)) # change end date if needed
+case_ts <- zoo(case_on$new_cases, seq(from = as.Date("2020-01-30"), to = as.Date("2020-08-10"), by = 1)) # change end date if needed
 case <- case_on$new_cases
 # policies of Canada and Ontario
 policy_on <- policy %>%
-  filter(Province == "Ontario" | Province == "Canada") %>% 
+  filter(Jurisdiction == "Ont." | Jurisdiction == "Can.") %>% 
+  mutate(Province = ifelse(Jurisdiction == "Ont.","Ontario","Canada")) %>%
   # prepare date field
   mutate(date = as.Date(ifelse(`Date implemented`=="No data" & 
                                  `Date announced`=="No data", NA,
@@ -106,14 +142,20 @@ df <- df %>%
   within(acc_pubinfo <- cumsum(`Public information`)) %>%
   within(acc_soe <- cumsum(`State of emergency`)) %>%
   within(acc_trav <- cumsum(Travel))
+
+df_train <- df %>%
+  filter(date <= as.Date("2020-08-10")) # policy data only available till Aug 10
+
+df_test <- df %>%
+  filter(date > as.Date("2020-08-10"))
 ```
 
 
 ```{r regARIMA}
 # ARIMA model with external regressors
-Xreg = data.matrix(df[c(23:33)]) #,21:33
-fit <- auto.arima(case_on$new_cases, xreg = Xreg, 
-                  stepwise = TRUE, seasonal = FALSE)
+Xreg = data.matrix(df_train[c(25:35)])
+fit <- auto.arima(df_train$new_cases, xreg = Xreg, stepwise = TRUE, 
+                  seasonal = FALSE)
 ```
 
 
@@ -126,9 +168,9 @@ summary(fit)
 ```
 
 ```{r plot}
-plot(seq(as.Date("2020/1/30"), by = "day", length.out = 258),
+plot(seq(as.Date("2020/1/30"), by = "day", length.out = 184),
      fit$fitted, type = 'l')
-lines(seq(as.Date("2020/1/30"), by = "day", length.out = 258),
-      case_on$new_cases, col="red")
+lines(seq(as.Date("2020/1/30"), by = "day", length.out = 184),
+      df_train$new_cases, col="red")
 
 ```
