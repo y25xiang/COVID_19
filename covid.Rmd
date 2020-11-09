@@ -1,0 +1,134 @@
+---
+title: "covid19"
+author: "Ruiwen Wang"
+date: "2020/10/23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Sys.setlocale("LC_ALL","English")
+```
+
+```{r lib, message=FALSE, warning=FALSE}
+# Load all the libraries needed.
+library(tidyverse) # to tidy data
+library(dplyr) #data manipulation
+library(gridExtra) # used to arrange plot
+library(ggplot2)
+library(zoo)
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(forecast)
+```
+
+## Data Import
+
+```{r data.import, message=FALSE}
+policy <- readr::read_csv("covid_policy_csv.csv")
+case_on <- readr::read_csv("case.csv") %>%
+  setnames(old = c('category','New cases'), new = c('date','new_cases'))
+```
+
+```{r ts_case}
+case_ts <- zoo(case_on$new_cases, seq(from = as.Date("2020-01-30"), to = as.Date("2020-08-01"), by = 1)) # change end date if needed
+case <- case_on$new_cases
+# policies of Canada and Ontario
+policy_on <- policy %>%
+  filter(Province == "Ontario" | Province == "Canada") %>% 
+  # prepare date field
+  mutate(date = as.Date(ifelse(`Date implemented`=="No data" & 
+                                 `Date announced`=="No data", NA,
+                               ifelse(`Date implemented`=="No data", 
+                                      `Date announced`, 
+                                      `Date implemented`))))
+```
+
+
+```{r plot}
+autoplot.zoo(case_ts) + 
+  geom_vline(xintercept = as.Date('2020-03-17'), color="red") +
+  geom_vline(xintercept = as.Date('2020-05-19'), color="blue") +
+  geom_vline(xintercept = as.Date('2020-06-12'), color="blue") +
+  geom_vline(xintercept = as.Date('2020-07-17'), color="blue") +
+  ggtitle("Ontario COVID-19 New Cases") + ylab("Cases") + xlab("Date") +
+  geom_text(aes(x=as.Date('2020-03-17'), y=600), label="Ontario Entered Emergency State", angle=90, text=element_text(size=11)) +
+  geom_text(aes(x=as.Date('2020-05-19'), y=600), label="Stage 1 Re-opening", angle=90, text=element_text(size=11)) +
+  geom_text(aes(x=as.Date('2020-06-12'), y=600), label="Stage 2 Re-opening", angle=90, text=element_text(size=11)) +
+  geom_text(aes(x=as.Date('2020-07-17'), y=600), label="Stage 3 Re-opening", angle=90, text=element_text(size=11))
+```
+
+```{r acf}
+# find parameters for ARIMA model
+acf(case)
+
+diff1=diff(case,differences=1,lag=1)
+acf(diff1)
+pacf(diff1)
+```
+
+After doing first order differencing, it could be noticed that the acf already drops to a low value after lag 1 and could be viewed as exponential decay. And the partial acf cuts off after lag 3. Hence, it would be appropriate to propose an ARIMA model of ARIMA(p=3, d=1, q=0).
+
+```{r arima1}
+# first split the data before/after policy
+#arima1 = sarima(logtrain,p=3,d=2,q=0)
+```
+
+
+```{r dataprep}
+policy_cnt_type <- policy_on %>%
+  dplyr::count(date,`Intervention category`) %>% 
+  tidyr::spread(key =`Intervention category`,value = n)
+policy_cnt_level <- policy_on %>%
+  dplyr::count(date,Province) %>% 
+  tidyr::spread(key = Province,value = n)
+
+# perform join with case table
+df <- case_on %>%
+  left_join(policy_cnt_level, by ='date') %>%
+  left_join(policy_cnt_type, by = 'date') 
+# fill in all missing values with 0
+df[is.na(df)] <- 0
+
+# add cumulative column for each type and jurisdiction
+df <- df %>%
+  within(acc_can <- cumsum(Canada)) %>%
+  within(acc_on <- cumsum(Ontario)) %>%
+  within(acc_casemgt <- cumsum(`Case management`)) %>%
+  within(acc_clo <- cumsum(Closures)) %>%
+  within(acc_cinfo <- cumsum(`Contextual information`)) %>%
+  within(acc_dist <- cumsum(Distancing)) %>%
+  within(acc_fin <- cumsum(`Financial and economic`)) %>%
+  within(acc_hserv <- cumsum(`Health services`)) %>%
+  within(acc_hwork <- cumsum(`Health workforce`)) %>%
+  within(acc_open <- cumsum(Openings)) %>%
+  within(acc_pubinfo <- cumsum(`Public information`)) %>%
+  within(acc_soe <- cumsum(`State of emergency`)) %>%
+  within(acc_trav <- cumsum(Travel))
+```
+
+
+```{r regARIMA}
+# ARIMA model with external regressors
+Xreg = data.matrix(df[c(23:33)]) #,21:33
+fit <- auto.arima(case_on$new_cases, xreg = Xreg, 
+                  stepwise = TRUE, seasonal = FALSE)
+```
+
+
+```{r arima}
+summary(fit)
+```
+
+```{r pval}
+(1-pnorm(abs(fit$coef)/sqrt(diag(fit$var.coef))))*2
+```
+
+```{r plot}
+plot(seq(as.Date("2020/1/30"), by = "day", length.out = 258),
+     fit$fitted, type = 'l')
+lines(seq(as.Date("2020/1/30"), by = "day", length.out = 258),
+      case_on$new_cases, col="red")
+
+```
