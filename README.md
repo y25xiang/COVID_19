@@ -1,2 +1,2 @@
 # COVID_19
-COVID19
+COVID19 Project
