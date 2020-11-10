@@ -1,0 +1,16 @@
+---
+title: "covid-19 section 3"
+author: "Xiaowen Zhang"
+date: "10/11/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Section 3
+
+This part is try to predict when Ontario is swtiching lock-down phases. Primarily, our group think the government decisions are based on the percent change of daily new cases and the current hospitalization rate, and we try to use these data to predict the ongoing phase changes. 
+
+
