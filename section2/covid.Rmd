@@ -30,6 +30,7 @@ library(forecast)
 ```{r data.import, message=FALSE}
 # policy data from link cihi
 # ref: https://www.cihi.ca/en/covid-19-intervention-timeline-in-canada#resources
+re_est <- readr::read_csv("re_estimates_on.csv")
 policy <- readr::read_csv("policy_sept.csv")
 # case data from ontario covid data
 # ref: https://covid-19.ontario.ca/data
@@ -37,7 +38,7 @@ cases <- readr::read_csv("cases.csv") %>%
   mutate(date=lubridate::mdy(sub("^(\\w+)\\s?(.*)$","\\2",category))) %>%
   setnames(old = c('New cases','7-day average', 'Total cases'), 
            new = c('new_cases','avg_cases', 'total_cases')) %>%
-  subset(select = c(date,new_cases,avg_cases, total_cases))
+  subset(select = c(date,new_cases,avg_cases, total_cases, ratio))
 death <- readr::read_csv("death.csv") %>%
   mutate(date=lubridate::mdy(sub("^(\\w+)\\s?(.*)$","\\2",category))) %>%
   setnames(old = c('New deaths'), new = c('death')) %>%
@@ -86,7 +87,8 @@ ggplot(policy_on, aes(x=intervention_category)) +geom_bar()+theme(axis.text.x = 
 
 
 ```{r}
-policy_on <- policy_on %>% setnames(old = "Date implemented", new = "dat_implemented")
+policy_on <- policy_on %>% setnames(old = "Date implemented", new = "dat_implemented") %>% filter(enforce == 1)
+policy_on <- policy_on %>% filter(enforce == 1)
 day_imple_policy <- tibble(policy_on %>% group_by(`dat_implemented`) %>% summarise(count = n())) %>% mutate(dat_implemented = as.Date(dat_implemented))
 
 on_policy_case <-day_imple_policy %>% left_join(case_on, by = c("dat_implemented" ="date"))
@@ -107,17 +109,13 @@ lm.1 <- lm(log(total_cases)~ intervention_category, data=new_on_policy_case2)
 summary(lm.1)
 
 
-#boxcox(new_cases~ intervention_category, data=new_on_policy_case1)
-lm.2 <- lm(sqrt(new_cases)~ intervention_category, data=new_on_policy_case1)
-summary(lm.2)
-
 lm.3 <- lm(log(new_cases)~ intervention_category, data=new_on_policy_case1)
 summary(lm.3)
 
 ```
 
 
-```{r}
+```{r, message=FALSE}
 ggplot(new_on_policy_case, aes(intervention_category, dat_implemented)) + geom_violin()+theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
 ```
 
@@ -129,7 +127,11 @@ ggplot(new_on_policy_case,aes(y=new_cases,x=intervention_category))+geom_boxplot
 
 
 
-```{r}
+
+
+
+
+```{r, message=FALSE, warning=FALSE}
 library(lavaan)
 library(semPlot)
 library(OpenMx)
@@ -140,18 +142,12 @@ library(GGally)
 ```
 #path analysis: path analysis is used to describe the directed dependencies among a set of variables.
 #A path coefficient is a standardized regression coefficient
-```{r}
-library(lavaan)
-library(semPlot)
-library(OpenMx)
-library(knitr)
-library(kableExtra)
-library(GGally)
+```{r, include=FALSE}
 #-0.14
 #unique(new_on_policy_case$intervention_category)
-new_on_policy_case <- new_on_policy_case %>% filter(new_cases >0) %>% mutate(log_new_case = log(new_cases))
-reduced_on_policy_case <- new_on_policy_case %>% filter(intervention_category %in% c("Travel", "State of emergency", "Closures", "Distancing", "Financial and economic"))
-model <- 'log_new_case ~ intervention_category'
+new_on_policy_case <- new_on_policy_case %>% filter(new_cases >0) %>% mutate(log_new_case = log(new_cases)) %>% mutate(log_total_case = log(total_cases))
+reduced_on_policy_case <- new_on_policy_case %>% filter(intervention_category %in% c("Travel", "State of emergency", "Closures"))
+model <- 'new_cases ~ intervention_category'
 fit_reduce <- cfa(model, data=reduced_on_policy_case)
 fit_all <- cfa(model, data=new_on_policy_case)
 #summary(fit, fit.measures = TRUE, standardized = TRUE, rsquare = TRUE)
@@ -167,22 +163,27 @@ semPlot::semPaths(fit_all, "std",layout = 'circle',
              fade=FALSE)
 
 
+
+model2 <- 'total_cases ~ intervention_category'
+fit_reduce2 <- cfa(model2, data=reduced_on_policy_case)
+fit_all2 <- cfa(model2, data=new_on_policy_case)
+
+semPlot::semPaths(fit_reduce2, "std",layout = 'circle',
+             sizeMan = 15, sizeInt = 15, sizeLat = 15,
+             edge.label.cex=1.5,
+             fade=FALSE)
+
+semPlot::semPaths(fit_all2, "std",layout = 'circle',
+             sizeMan = 15, sizeInt = 15, sizeLat = 15,
+             edge.label.cex=1.5,
+             fade=FALSE)
 ```
-
-
-```{r}
-
-
-on_policy_case <- on_policy_case %>% slice(16:40)
-
- ggplot(on_policy_case, aes(count, new_cases)) +
-     geom_path(colour = "grey50") +
-     geom_point(aes(colour = dat_implemented))
-```
+Path coefficient: They are not correlation coefficients.  The meaning of the path coefficient 0.05 is this: if region A increases by one standard deviation from its mean, region B would be expected to increase by 0.05 its own standard deviations from its own mean while holding all other relevant regional connections constant. 
 
 
 
-```{r plot}
+
+```{r plot, include=FALSE}
 autoplot.zoo(case_ts) + 
   geom_vline(xintercept = as.Date('2020-03-17'), color="red") +
   geom_vline(xintercept = as.Date('2020-05-19'), color="blue") +
@@ -195,7 +196,7 @@ autoplot.zoo(case_ts) +
   geom_text(aes(x=as.Date('2020-07-17'), y=600), label="Stage 3 Re-opening", angle=90, text=element_text(size=11))
 ```
 
-```{r acf}
+```{r acf, include=FALSE}
 # find parameters for ARIMA model
 acf(case)
 diff1=diff(case,differences=1,lag=1)
@@ -213,8 +214,8 @@ After doing first order differencing, it could be noticed that the acf already d
 
 ```{r dataprep}
 policy_cnt_type <- policy_on %>%
-  dplyr::count(date,`Intervention category`) %>% 
-  tidyr::spread(key =`Intervention category`,value = n)
+  dplyr::count(date,`intervention_category`) %>% 
+  tidyr::spread(key =`intervention_category`,value = n)
 policy_cnt_level <- policy_on %>%
   dplyr::count(date,Province) %>% 
   tidyr::spread(key = Province,value = n)
@@ -230,7 +231,7 @@ df <- df %>%
   within(acc_on <- cumsum(Ontario)) %>%
   within(acc_casemgt <- cumsum(`Case management`)) %>%
   within(acc_clo <- cumsum(Closures)) %>%
-  within(acc_cinfo <- cumsum(`Contextual information`)) %>%
+ # within(acc_cinfo <- cumsum(`Contextual information`)) %>%
   within(acc_dist <- cumsum(Distancing)) %>%
   within(acc_fin <- cumsum(`Financial and economic`)) %>%
   within(acc_hserv <- cumsum(`Health services`)) %>%
@@ -246,6 +247,70 @@ df_test <- df %>%
 ```
 
 
+**Lagging 14 days for policy counting**
+```{r}
+df_lag <- df %>% mutate(date =  as.Date(date) + 14) %>% mutate(`Case management` = - `Case management`) %>% mutate(Closures = - Closures) %>% mutate(Distancing = -Distancing) %>% mutate(`Financial and economic` = - `Financial and economic`) %>% mutate(`Health services` = - `Health services`) %>% mutate(`Health workforce` = -`Health workforce`) %>% mutate(Openings = -Openings) %>% mutate(`Public information` = - `Public information`) %>% mutate( `State of emergency` = - `State of emergency`) %>% mutate(Travel = -Travel) %>% dplyr::select(date,  `Case management`: Travel)
+
+df_new <- df %>% dplyr::select(-(Canada : Travel))
+df_combine <- df_new %>% left_join(df_lag, by = c("date" = "date"))
+
+df_combine <- df_combine %>% mutate_if(is.integer, ~replace(., is.na(.), 0)) %>%
+  #within(acc_can <- cumsum(Canada)) %>%
+  #within(acc_on <- cumsum(Ontario)) %>%
+  within(acc_neg_casemgt <- cumsum(`Case management`)) %>%
+  within(acc_neg_clo <- cumsum(Closures)) %>%
+ # within(acc_cinfo <- cumsum(`Contextual information`)) %>%
+  within(acc_neg_dist <- cumsum(Distancing)) %>%
+  within(acc_neg_fin <- cumsum(`Financial and economic`)) %>%
+  within(acc_neg_hserv <- cumsum(`Health services`)) %>%
+  within(acc_neg_hwork <- cumsum(`Health workforce`)) %>%
+  within(acc_neg_open <- cumsum(Openings)) %>%
+  within(acc_neg_pubinfo <- cumsum(`Public information`)) %>%
+  within(acc_neg_soe <- cumsum(`State of emergency`)) %>%
+  within(acc_neg_trav <- cumsum(Travel))
+
+df_combine <- df_combine %>% mutate(acc_casemgt = acc_casemgt + acc_neg_casemgt) %>% mutate(acc_clo = acc_clo + acc_neg_clo) %>% mutate(acc_dist = acc_dist + acc_neg_dist) %>% mutate(acc_fin = acc_fin + acc_neg_fin) %>% mutate(acc_hserv = acc_hserv + acc_neg_hserv) %>% mutate(acc_hwork = acc_hwork + acc_neg_hwork) %>% mutate(acc_open = acc_open + acc_neg_open) %>% mutate(acc_pubinfo = acc_pubinfo + acc_neg_pubinfo) %>% mutate(acc_soe = acc_soe + acc_neg_soe) %>% mutate(acc_trav = acc_trav + acc_neg_trav)
+
+df_combine <- df_combine %>% left_join(re_est, by=c("date" = "date_start"))
+```
+
+
+```{r}
+df_combine_p1 <- df_combine %>% slice(38:99)%>% drop_na(new_cases) %>% filter(new_cases >0) 
+lm.lag <- lm(log(new_cases) ~ acc_clo + acc_trav +acc_soe + acc_casemgt+acc_dist+acc_fin+acc_hserv+ acc_hwork + acc_open + acc_pubinfo , data = df_combine_p1)
+summary(lm.lag)
+
+df_combine <- df_combine %>%slice(34:257)%>% drop_na(new_cases) %>% filter(new_cases >0) 
+lm.lag1 <- lm(ratio ~ acc_clo + acc_trav +acc_soe  , data = df_combine)
+summary(lm.lag1)
+
+
+df_combine_w1 <- df_combine %>%slice(1:68)
+lm.re <- lm(Re ~ acc_clo + acc_trav +acc_soe  , data = df_combine_w1)
+summary(lm.re)
+
+lm.re.all <- lm(Re ~ acc_clo + acc_trav +acc_soe + acc_casemgt+acc_dist+acc_fin+acc_hserv+ acc_hwork + acc_open + acc_pubinfo , data = df_combine_w1)
+summary(lm.re.all)
+```
+
+
+**Logistic regression**
+```{r}
+df_combine_logit <- df_combine %>% slice(5:148) %>% mutate(bench_mark = ifelse(Re > 1, 1, 0))
+
+model_logit <- glm(bench_mark ~  acc_clo +acc_trav +acc_soe + acc_casemgt + acc_dist + acc_fin + acc_hserv + acc_hwork + acc_open + acc_pubinfo, family = binomial(), data = df_combine_logit)
+summary(model_logit)
+
+selection_logit <- step(model_logit)
+
+p <- predict(model_logit, df_combine_logit,type = "response")
+p_class <- ifelse(p>0.5, 1,0)
+table(p_class, df_combine_logit[["bench_mark"]])
+```
+
+
+
+**Time Series **
 ```{r regARIMA}
 # ARIMA model with external regressors
 Xreg = data.matrix(df_train[c(25:35)])
@@ -268,3 +333,47 @@ plot(seq(as.Date("2020/1/30"), by = "day", length.out = 184),
 lines(seq(as.Date("2020/1/30"), by = "day", length.out = 184),
       df_train$new_cases, col="red")
 ```
+
+
+
+**PCA Analysis**
+```{r}
+Y= df[ , 26:36]
+policy.pca = prcomp(Y)
+summary(policy.pca)
+```
+
+Based on the above result, we can find that the proportion of total variance explained by the first principal component is 94.3%.
+
+```{r}
+policy.pca$rotation
+```
+
+```{r}
+#####perform the principal component analysis for the standardized variables###
+policy2.pca = prcomp(Y, scale=TRUE)
+
+##summarize the PCA result
+summary(policy2.pca)
+
+```
+
+
+```{r}
+policy2.pca$rotation
+```
+
+```{r}
+library(factoextra)
+fviz_pca_var(policy2.pca,select.var = list(contrib = 8),gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), repel = TRUE)
+
+fviz_pca_var(policy2.pca,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+```
+
+Component 1: All variables are positively correlated.
+
+Component 2: Sleep, Energy, and Appetite seem to be less correlated to the rest of the variables (approaching orthogonality).
